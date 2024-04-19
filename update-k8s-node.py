@@ -27,7 +27,7 @@ def main():
     changes_notification_message = changes_notification_message[:-2]
 
     response = requests.post(
-        "http://ponyboy/send_discord_message",
+        "http://ponyboy.apartment/send_discord_message",
         json={"user_id": 178748204999901185, "message": changes_notification_message},
     )
     if not response.ok:
@@ -38,7 +38,7 @@ def main():
 
     print("Notifying user of completion")
     response = requests.post(
-        "http://ponyboy/send_discord_message",
+        "http://ponyboy.apartment/send_discord_message",
         json={
             "user_id": 178748204999901185,
             "message": f"{hostname}: Updates have been applied, scheduling the node to be rebooted.",
