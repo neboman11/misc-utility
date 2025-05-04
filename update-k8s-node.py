@@ -5,6 +5,19 @@ import socket
 
 
 def main():
+    # Check if the reboot file exists and skip the rest of the script if it does
+    if os.path.exists("/var/run/reboot-required"):
+        response = requests.post(
+            "http://ponyboy.apartment/send_discord_message",
+            json={
+                "user_id": 178748204999901185,
+                "message": f"{hostname}: Node is already scheduled for reboot. Skipping updates.",
+            },
+        )
+        if not response.ok:
+            print(response.text)
+        return
+
     hostname = socket.gethostname()
     cache = apt.Cache()
 
