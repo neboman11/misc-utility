@@ -5,6 +5,7 @@ import socket
 
 
 def main():
+    hostname = socket.gethostname()
     # Check if the reboot file exists and skip the rest of the script if it does
     if os.path.exists("/var/run/reboot-required"):
         response = requests.post(
@@ -18,7 +19,6 @@ def main():
             print(response.text)
         return
 
-    hostname = socket.gethostname()
     cache = apt.Cache()
 
     print("Updating package cache...")
