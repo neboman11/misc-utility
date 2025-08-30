@@ -51,7 +51,6 @@ def send_notification(message: str):
     response = requests.post(
         "https://ntfy.nesbitt.rocks/servers",
         json={
-            "user_id": 178748204999901185,
             "message": message,
         },
         headers={"Authorization": f"Bearer {os.getenv('NTFY_AUTH_TOKEN')}"},
