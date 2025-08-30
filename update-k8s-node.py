@@ -54,7 +54,7 @@ def send_notification(message: str):
             "user_id": 178748204999901185,
             "message": message,
         },
-        headers={"Authorization": f"Bearer {os.getenv("NTFY_AUTH_TOKEN")}"},
+        headers={"Authorization": f"Bearer {os.getenv('NTFY_AUTH_TOKEN')}"},
     )
     if not response.ok:
         print(response.text)
