@@ -8,15 +8,9 @@ def main():
     hostname = socket.gethostname()
     # Check if the reboot file exists and skip the rest of the script if it does
     if os.path.exists("/var/run/reboot-required"):
-        response = requests.post(
-            "http://ponyboy.apartment/send_discord_message",
-            json={
-                "user_id": 178748204999901185,
-                "message": f"{hostname}: Node is already scheduled for reboot. Skipping updates.",
-            },
+        send_notification(
+            f"{hostname}: Node is already scheduled for reboot. Skipping updates."
         )
-        if not response.ok:
-            print(response.text)
         return
 
     cache = apt.Cache()
@@ -39,29 +33,31 @@ def main():
     # Remove the trailing comma and space
     changes_notification_message = changes_notification_message[:-2]
 
-    response = requests.post(
-        "http://ponyboy.apartment/send_discord_message",
-        json={"user_id": 178748204999901185, "message": changes_notification_message},
-    )
-    if not response.ok:
-        print(response.text)
+    send_notification(changes_notification_message)
 
     print("Performing package upgrade...")
     cache.commit()
 
     print("Notifying user of completion")
-    response = requests.post(
-        "http://ponyboy.apartment/send_discord_message",
-        json={
-            "user_id": 178748204999901185,
-            "message": f"{hostname}: Updates have been applied, scheduling the node to be rebooted.",
-        },
+    send_notification(
+        f"{hostname}: Updates have been applied, scheduling the node to be rebooted."
     )
-    if not response.ok:
-        print(response.text)
 
     # Creating this file will schedule the node for a reboot
     open("/var/run/reboot-required", "a").close()
+
+
+def send_notification(message: str):
+    response = requests.post(
+        "https://ntfy.nesbitt.rocks/servers",
+        json={
+            "user_id": 178748204999901185,
+            "message": message,
+        },
+        headers={"Authorization": f"Bearer {os.getenv("NTFY_AUTH_TOKEN")}"},
+    )
+    if not response.ok:
+        print(response.text)
 
 
 if __name__ == "__main__":
