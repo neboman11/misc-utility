@@ -124,12 +124,17 @@ def update_k8s_sources(client, new_minor_version, sudo_password, host):
 
 def upgrade_k8s_node(client, kube_version, sudo_password, host, is_control=False):
     logging.info(f"[{host}] Starting upgrade process")
+
+    # Remove hold before upgrade
+    remove_hold(client, sudo_password, host)
+
+    # Update apt and upgrade kubeadm
     run_cmd(
         client, "apt-get update -y", sudo_password=sudo_password, sudo=True, host=host
     )
     run_cmd(
         client,
-        f"apt-get install -y kubeadm={kube_version}-00",
+        f"apt-get install -y kubeadm={kube_version}-1.1",
         sudo_password=sudo_password,
         sudo=True,
         host=host,
@@ -153,9 +158,10 @@ def upgrade_k8s_node(client, kube_version, sudo_password, host, is_control=False
             host=host,
         )
 
+    # Upgrade kubelet and kubectl
     run_cmd(
         client,
-        f"apt-get install -y kubelet={kube_version}-00 kubectl={kube_version}-00",
+        f"apt-get install -y kubelet={kube_version}-1.1 kubectl={kube_version}-1.1",
         sudo_password=sudo_password,
         sudo=True,
         host=host,
@@ -175,6 +181,9 @@ def upgrade_k8s_node(client, kube_version, sudo_password, host, is_control=False
         host=host,
     )
 
+    # Re-add hold after upgrade
+    add_hold(client, sudo_password, host)
+
     if is_control:
         logging.info(f"[{host}] Uncordoning control plane node")
         run_cmd(
@@ -186,6 +195,28 @@ def upgrade_k8s_node(client, kube_version, sudo_password, host, is_control=False
         )
 
     logging.info(f"[{host}] Upgrade process completed")
+
+
+def remove_hold(client, sudo_password, host):
+    logging.info(f"[{host}] Removing hold on kubeadm, kubelet, kubectl")
+    run_cmd(
+        client,
+        "apt-mark unhold kubeadm kubelet kubectl",
+        sudo_password=sudo_password,
+        sudo=True,
+        host=host,
+    )
+
+
+def add_hold(client, sudo_password, host):
+    logging.info(f"[{host}] Re-adding hold on kubeadm, kubelet, kubectl")
+    run_cmd(
+        client,
+        "apt-mark hold kubeadm kubelet kubectl",
+        sudo_password=sudo_password,
+        sudo=True,
+        host=host,
+    )
 
 
 def main():
