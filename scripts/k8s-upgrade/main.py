@@ -4,6 +4,7 @@ import re
 import os
 import getpass
 import logging
+import subprocess
 import sys
 
 INVENTORY_FILE = "inventory.txt"  # Format: hostname role (control/worker)
@@ -122,11 +123,63 @@ def update_k8s_sources(client, new_minor_version, sudo_password, host):
     logging.info(f"[{host}] Kubernetes sources updated successfully")
 
 
+def remove_hold(client, sudo_password, host):
+    logging.info(f"[{host}] Removing hold on kubeadm, kubelet, kubectl")
+    run_cmd(
+        client,
+        "apt-mark unhold kubeadm kubelet kubectl",
+        sudo_password=sudo_password,
+        sudo=True,
+        host=host,
+    )
+
+
+def add_hold(client, sudo_password, host):
+    logging.info(f"[{host}] Re-adding hold on kubeadm, kubelet, kubectl")
+    run_cmd(
+        client,
+        "apt-mark hold kubeadm kubelet kubectl",
+        sudo_password=sudo_password,
+        sudo=True,
+        host=host,
+    )
+
+
+def run_local_kubectl(cmd, host):
+    """Run kubectl command locally, targeting the node hostname."""
+    full_cmd = f"kubectl {cmd} {host}"
+    logging.info(f"[{host}] Running local kubectl: {full_cmd}")
+    try:
+        output = subprocess.check_output(
+            full_cmd, shell=True, stderr=subprocess.STDOUT, text=True
+        )
+        logging.info(f"[{host}] kubectl output: {output.strip()}")
+    except subprocess.CalledProcessError as e:
+        logging.error(f"[{host}] kubectl command failed: {e.output.strip()}")
+        sys.exit(1)
+
+
+def cordon_node(host):
+    run_local_kubectl("cordon", host)
+
+
+def drain_node(host):
+    run_local_kubectl("drain --ignore-daemonsets --delete-local-data", host)
+
+
+def uncordon_node(host):
+    run_local_kubectl("uncordon", host)
+
+
 def upgrade_k8s_node(client, kube_version, sudo_password, host, is_control=False):
     logging.info(f"[{host}] Starting upgrade process")
 
     # Remove hold before upgrade
     remove_hold(client, sudo_password, host)
+
+    # Cordon and drain the node
+    cordon_node(client)
+    drain_node(client)
 
     # Update apt and upgrade kubeadm
     run_cmd(
@@ -141,14 +194,6 @@ def upgrade_k8s_node(client, kube_version, sudo_password, host, is_control=False
     )
 
     if is_control:
-        logging.info(f"[{host}] Draining control plane node")
-        run_cmd(
-            client,
-            "kubectl drain $(hostname) --ignore-daemonsets --delete-local-data",
-            sudo_password=sudo_password,
-            sudo=True,
-            host=host,
-        )
         logging.info(f"[{host}] Applying kubeadm upgrade")
         run_cmd(
             client,
@@ -184,39 +229,10 @@ def upgrade_k8s_node(client, kube_version, sudo_password, host, is_control=False
     # Re-add hold after upgrade
     add_hold(client, sudo_password, host)
 
-    if is_control:
-        logging.info(f"[{host}] Uncordoning control plane node")
-        run_cmd(
-            client,
-            "kubectl uncordon $(hostname)",
-            sudo_password=sudo_password,
-            sudo=True,
-            host=host,
-        )
+    # Uncordon node after upgrade
+    uncordon_node(client)
 
     logging.info(f"[{host}] Upgrade process completed")
-
-
-def remove_hold(client, sudo_password, host):
-    logging.info(f"[{host}] Removing hold on kubeadm, kubelet, kubectl")
-    run_cmd(
-        client,
-        "apt-mark unhold kubeadm kubelet kubectl",
-        sudo_password=sudo_password,
-        sudo=True,
-        host=host,
-    )
-
-
-def add_hold(client, sudo_password, host):
-    logging.info(f"[{host}] Re-adding hold on kubeadm, kubelet, kubectl")
-    run_cmd(
-        client,
-        "apt-mark hold kubeadm kubelet kubectl",
-        sudo_password=sudo_password,
-        sudo=True,
-        host=host,
-    )
 
 
 def main():
