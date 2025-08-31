@@ -4,7 +4,7 @@ import re
 import os
 import getpass
 import logging
-from datetime import datetime
+import sys
 
 INVENTORY_FILE = "inventory.txt"  # Format: hostname role (control/worker)
 K8S_LIST_FILE = "/etc/apt/sources.list.d/kubernetes.list"
@@ -64,10 +64,15 @@ def run_cmd(client, cmd, sudo_password="", sudo=False, host=None):
     if sudo:
         stdin.write(sudo_password + "\n")
         stdin.flush()
+    exit_status = stdout.channel.recv_exit_status()
     output = stdout.read().decode()
     error = stderr.read().decode()
-    if error:
-        logging.warning(f"[{host}] Error output: {error.strip()}")
+    if exit_status != 0:
+        logging.error(f"[{host}] Command failed with exit code {exit_status}: {cmd}")
+        logging.error(f"[{host}] Stderr: {error.strip()}")
+        sys.exit(1)
+    if error.strip():
+        logging.warning(f"[{host}] Warning output: {error.strip()}")
     return output.strip()
 
 
@@ -85,7 +90,8 @@ def get_current_k8s_version(client, sudo_password, host):
             f"[{host}] Current Kubernetes version in sources: {match.group(1)}"
         )
         return match.group(1)
-    raise ValueError(f"[{host}] Could not parse Kubernetes version from sources list")
+    logging.error(f"[{host}] Could not parse Kubernetes version from sources list")
+    sys.exit(1)
 
 
 def get_latest_k8s_version(client, sudo_password, host):
@@ -100,34 +106,20 @@ def get_latest_k8s_version(client, sudo_password, host):
     if match:
         logging.info(f"[{host}] Latest available kubeadm version: {match.group(1)}")
         return match.group(1)
-    raise ValueError(f"[{host}] Could not find latest kubeadm version")
+    logging.error(f"[{host}] Could not find latest kubeadm version")
+    sys.exit(1)
 
 
 def update_k8s_sources(client, new_minor_version, sudo_password, host):
     logging.info(f"[{host}] Updating Kubernetes apt sources to v{new_minor_version}")
-    content = run_cmd(
-        client,
-        f"cat {K8S_LIST_FILE}",
-        sudo_password=sudo_password,
-        sudo=True,
-        host=host,
-    )
-    new_content = re.sub(r"(v\d+\.\d+)/deb", f"v{new_minor_version}/deb", content)
-    tmp_file = "/tmp/kubernetes.list"
-    run_cmd(
-        client,
-        f'echo "{new_content}" | sudo tee {tmp_file}',
-        sudo_password=sudo_password,
-        host=host,
-    )
-    run_cmd(
-        client,
-        f"sudo mv {tmp_file} {K8S_LIST_FILE}",
-        sudo_password=sudo_password,
-        sudo=True,
-        host=host,
-    )
-    logging.info(f"[{host}] Kubernetes sources updated")
+
+    # sed command to replace the version in-place
+    sed_cmd = f"sed -i 's|/v[0-9]\\+\\.[0-9]\\+/deb/|/v{new_minor_version}/deb/|' {K8S_LIST_FILE}"
+
+    # Run with sudo
+    run_cmd(client, sed_cmd, sudo_password=sudo_password, sudo=True, host=host)
+
+    logging.info(f"[{host}] Kubernetes sources updated successfully")
 
 
 def upgrade_k8s_node(client, kube_version, sudo_password, host, is_control=False):
@@ -200,7 +192,7 @@ def main():
     nodes = read_inventory()
     if not nodes["control"]:
         logging.error("No control plane node found in inventory.")
-        return
+        sys.exit(1)
 
     ssh_config = load_ssh_config()
     sudo_password = getpass.getpass("Enter sudo password for all nodes: ")
