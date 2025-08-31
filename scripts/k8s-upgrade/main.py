@@ -120,6 +120,8 @@ def update_k8s_sources(client, new_minor_version, sudo_password, host):
     # Run with sudo
     run_cmd(client, sed_cmd, sudo_password=sudo_password, sudo=True, host=host)
 
+    run_cmd(client, "apt-get update", sudo_password=sudo_password, sudo=True, host=host)
+
     logging.info(f"[{host}] Kubernetes sources updated successfully")
 
 
@@ -164,7 +166,7 @@ def cordon_node(host):
 
 
 def drain_node(host):
-    run_local_kubectl("drain --ignore-daemonsets --delete-local-data", host)
+    run_local_kubectl("drain --ignore-daemonsets --delete-emptydir-data", host)
 
 
 def uncordon_node(host):
@@ -178,8 +180,8 @@ def upgrade_k8s_node(client, kube_version, sudo_password, host, is_control=False
     remove_hold(client, sudo_password, host)
 
     # Cordon and drain the node
-    cordon_node(client)
-    drain_node(client)
+    cordon_node(host)
+    drain_node(host)
 
     # Update apt and upgrade kubeadm
     run_cmd(
@@ -230,7 +232,7 @@ def upgrade_k8s_node(client, kube_version, sudo_password, host, is_control=False
     add_hold(client, sudo_password, host)
 
     # Uncordon node after upgrade
-    uncordon_node(client)
+    uncordon_node(host)
 
     logging.info(f"[{host}] Upgrade process completed")
 
@@ -250,21 +252,23 @@ def main():
     client = ssh_connect(hostname, user, keyfile, port)
 
     current_version = get_current_k8s_version(client, sudo_password, control_host)
-    latest_version = get_latest_k8s_version(client, sudo_password, control_host)
-    logging.info(
-        f"Current version: {current_version}, Latest available: {latest_version}"
-    )
-
-    all_hosts = nodes["control"] + nodes["worker"]
-    new_minor_version = ".".join(latest_version.split(".")[:2])
+    new_minor_version = f"1.{int(current_version.split('.')[1]) + 1}"
 
     # Update sources on all nodes
+    all_hosts = nodes["control"] + nodes["worker"]
     for host in all_hosts:
         hostname, user, keyfile, port = get_ssh_params(ssh_config, host)
         logging.info(f"[{host}] Connecting to update sources")
         c = ssh_connect(hostname, user, keyfile, port)
         update_k8s_sources(c, new_minor_version, sudo_password, host)
         c.close()
+
+    latest_version = get_latest_k8s_version(client, sudo_password, control_host)
+    logging.info(
+        f"Current version: {current_version}, Latest available: {latest_version}"
+    )
+
+    input(f"New version will be {latest_version}. Continue?")
 
     # Upgrade control plane node
     logging.info(f"[{control_host}] Upgrading control plane node")
