@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from time import sleep
 import paramiko
 import re
 import os
@@ -181,6 +182,9 @@ def upgrade_k8s_node(client, kube_version, sudo_password, host, is_control=False
 
     # Cordon and drain the node
     cordon_node(host)
+
+    if not is_control:
+        sleep(10)
     drain_node(host)
 
     # Update apt and upgrade kubeadm
