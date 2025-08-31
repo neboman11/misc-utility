@@ -61,11 +61,14 @@ detect_next_version() {
   info "Current cluster version: v${current_full}"
   info "Looking for latest patch in v1.${next_minor}.x (from ${leader_host})"
 
+  # Update repo before checking apt-cache
+  update_repo_for_minor "$leader_host" "$next_minor"
+
   # Ask the leader what versions are available
   local latest_patch
   latest_patch=$(remote_sudo "$leader_host" "
   apt-cache madison kubeadm \
-      | awk '{print \$3}' \
+      | awk '{print \\\$3}' \
       | grep -E '^1\\.${next_minor}\\.' \
       | sort -V \
       | tail -n1
@@ -114,6 +117,13 @@ upgrade_node() {
   "
 }
 
+update_repo_for_minor() {
+  local host="$1"
+  local minor="$2"
+  remote_sudo "$host" "sed -i 's|core:/stable:/v[0-9]*\.[0-9]*/deb/|core:/stable:/v1.${minor}/deb/|' /etc/apt/sources.list.d/kubernetes.list"
+  remote_sudo "$host" "apt-get update -y"
+}
+
 ### ==================
 ### Main flow
 ### ==================
@@ -155,16 +165,21 @@ node_ready_wait "${CP_LEADER_NODE}"
 for entry in "${CP_FOLLOWERS[@]}"; do
   host=$(echo "$entry" | awk '{print $1}')
   node=$(echo "$entry" | awk '{print $2}')
+  # Update repo before upgrading
+  update_repo_for_minor "$host" "$(echo "$TARGET_SHORT_VERSION" | cut -d. -f2)"
   drain_node "$node"
   upgrade_node "$host" "$TARGET_DEB_VERSION"
   uncordon_node "$node"
   node_ready_wait "$node"
+  
 done
 
 # 3. Workers
 for entry in "${WORKERS[@]}"; do
   host=$(echo "$entry" | awk '{print $1}')
   node=$(echo "$entry" | awk '{print $2}')
+  # Update repo before upgrading
+  update_repo_for_minor "$host" "$(echo "$TARGET_SHORT_VERSION" | cut -d. -f2)"
   drain_node "$node"
   upgrade_node "$host" "$TARGET_DEB_VERSION"
   uncordon_node "$node"
