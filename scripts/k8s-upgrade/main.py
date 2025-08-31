@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
 import paramiko
 import re
+import os
+import getpass
+import logging
+from datetime import datetime
 
-INVENTORY_FILE = "inventory.txt"  # Format: IP role (control/worker)
+INVENTORY_FILE = "inventory.txt"  # Format: hostname role (control/worker)
 K8S_LIST_FILE = "/etc/apt/sources.list.d/kubernetes.list"
-SSH_USER = "your_ssh_user"
-SSH_KEY_FILE = "/path/to/private/key"
+SSH_CONFIG_FILE = os.path.expanduser("~/.ssh/config")
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.FileHandler("k8s_upgrade.log"), logging.StreamHandler()],
+)
 
 
 def read_inventory():
@@ -14,126 +24,225 @@ def read_inventory():
         for line in f:
             if not line.strip():
                 continue
-            ip, role = line.strip().split()
+            host, role = line.strip().split()
             if role not in nodes:
                 raise ValueError(f"Unknown role '{role}' in inventory")
-            nodes[role].append(ip)
+            nodes[role].append(host)
     return nodes
 
 
-def ssh_connect(host):
+def load_ssh_config():
+    ssh_config = paramiko.SSHConfig()
+    with open(SSH_CONFIG_FILE) as f:
+        ssh_config.parse(f)
+    return ssh_config
+
+
+def get_ssh_params(ssh_config, host):
+    cfg = ssh_config.lookup(host)
+    hostname = cfg.get("hostname", host)
+    user = cfg.get("user", getpass.getuser())
+    keyfile = cfg.get("identityfile", [os.path.expanduser("~/.ssh/id_rsa")])[0]
+    port = int(cfg.get("port", 22))
+    return hostname, user, keyfile, port
+
+
+def ssh_connect(hostname, user, keyfile, port=22):
+    logging.info(f"Connecting to {hostname} as {user}")
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(hostname=host, username=SSH_USER, key_filename=SSH_KEY_FILE)
+    client.connect(hostname=hostname, username=user, key_filename=keyfile, port=port)
     return client
 
 
-def run_cmd(client, cmd, sudo=False):
+def run_cmd(client, cmd, sudo_password="", sudo=False, host=None):
+    host = host or "unknown"
+    logging.info(f"[{host}] Running command: {cmd}")
     if sudo:
         cmd = f"sudo -S -p '' {cmd}"
     stdin, stdout, stderr = client.exec_command(cmd)
     if sudo:
-        stdin.write("\n")  # assumes passwordless sudo
+        stdin.write(sudo_password + "\n")
         stdin.flush()
     output = stdout.read().decode()
     error = stderr.read().decode()
     if error:
-        print(f"Error on {cmd}:\n{error}")
+        logging.warning(f"[{host}] Error output: {error.strip()}")
     return output.strip()
 
 
-def get_current_k8s_version(client):
-    content = run_cmd(client, f"cat {K8S_LIST_FILE}", sudo=True)
+def get_current_k8s_version(client, sudo_password, host):
+    content = run_cmd(
+        client,
+        f"cat {K8S_LIST_FILE}",
+        sudo_password=sudo_password,
+        sudo=True,
+        host=host,
+    )
     match = re.search(r"v(\d+\.\d+)/deb", content)
     if match:
+        logging.info(
+            f"[{host}] Current Kubernetes version in sources: {match.group(1)}"
+        )
         return match.group(1)
-    raise ValueError("Could not parse Kubernetes version from sources list")
+    raise ValueError(f"[{host}] Could not parse Kubernetes version from sources list")
 
 
-def get_latest_k8s_version(client):
-    output = run_cmd(client, "apt-cache madison kubeadm | head -1", sudo=True)
+def get_latest_k8s_version(client, sudo_password, host):
+    output = run_cmd(
+        client,
+        "apt-cache madison kubeadm | head -1",
+        sudo_password=sudo_password,
+        sudo=True,
+        host=host,
+    )
     match = re.search(r"\|\s*(\d+\.\d+\.\d+)-", output)
     if match:
+        logging.info(f"[{host}] Latest available kubeadm version: {match.group(1)}")
         return match.group(1)
-    raise ValueError("Could not find latest kubeadm version")
+    raise ValueError(f"[{host}] Could not find latest kubeadm version")
 
 
-def update_k8s_sources(client, new_minor_version):
-    content = run_cmd(client, f"cat {K8S_LIST_FILE}", sudo=True)
+def update_k8s_sources(client, new_minor_version, sudo_password, host):
+    logging.info(f"[{host}] Updating Kubernetes apt sources to v{new_minor_version}")
+    content = run_cmd(
+        client,
+        f"cat {K8S_LIST_FILE}",
+        sudo_password=sudo_password,
+        sudo=True,
+        host=host,
+    )
     new_content = re.sub(r"(v\d+\.\d+)/deb", f"v{new_minor_version}/deb", content)
     tmp_file = "/tmp/kubernetes.list"
-    run_cmd(client, f'echo "{new_content}" | sudo tee {tmp_file}', sudo=False)
-    run_cmd(client, f"sudo mv {tmp_file} {K8S_LIST_FILE}", sudo=True)
-    print(f"Updated {K8S_LIST_FILE} to v{new_minor_version}")
-
-
-def upgrade_k8s_node(client, kube_version, is_control=False):
-    print("Updating apt cache...")
-    run_cmd(client, "sudo apt-get update -y", sudo=True)
-
-    print(f"Installing kubeadm={kube_version}-00...")
-    run_cmd(client, f"sudo apt-get install -y kubeadm={kube_version}-00", sudo=True)
-
-    if is_control:
-        print("Draining control plane node...")
-        run_cmd(
-            client,
-            "sudo kubectl drain $(hostname) --ignore-daemonsets --delete-local-data",
-            sudo=True,
-        )
-        print(f"Applying kubeadm upgrade apply v{kube_version}...")
-        run_cmd(client, f"sudo kubeadm upgrade apply -y v{kube_version}", sudo=True)
-
-    print(f"Upgrading kubelet and kubectl to {kube_version}-00...")
     run_cmd(
         client,
-        f"sudo apt-get install -y kubelet={kube_version}-00 kubectl={kube_version}-00",
-        sudo=True,
+        f'echo "{new_content}" | sudo tee {tmp_file}',
+        sudo_password=sudo_password,
+        host=host,
     )
-    run_cmd(client, "sudo systemctl daemon-reload", sudo=True)
-    run_cmd(client, "sudo systemctl restart kubelet", sudo=True)
+    run_cmd(
+        client,
+        f"sudo mv {tmp_file} {K8S_LIST_FILE}",
+        sudo_password=sudo_password,
+        sudo=True,
+        host=host,
+    )
+    logging.info(f"[{host}] Kubernetes sources updated")
+
+
+def upgrade_k8s_node(client, kube_version, sudo_password, host, is_control=False):
+    logging.info(f"[{host}] Starting upgrade process")
+    run_cmd(
+        client, "apt-get update -y", sudo_password=sudo_password, sudo=True, host=host
+    )
+    run_cmd(
+        client,
+        f"apt-get install -y kubeadm={kube_version}-00",
+        sudo_password=sudo_password,
+        sudo=True,
+        host=host,
+    )
 
     if is_control:
-        print("Uncordoning control plane node...")
-        run_cmd(client, "sudo kubectl uncordon $(hostname)", sudo=True)
+        logging.info(f"[{host}] Draining control plane node")
+        run_cmd(
+            client,
+            "kubectl drain $(hostname) --ignore-daemonsets --delete-local-data",
+            sudo_password=sudo_password,
+            sudo=True,
+            host=host,
+        )
+        logging.info(f"[{host}] Applying kubeadm upgrade")
+        run_cmd(
+            client,
+            f"kubeadm upgrade apply -y v{kube_version}",
+            sudo_password=sudo_password,
+            sudo=True,
+            host=host,
+        )
+
+    run_cmd(
+        client,
+        f"apt-get install -y kubelet={kube_version}-00 kubectl={kube_version}-00",
+        sudo_password=sudo_password,
+        sudo=True,
+        host=host,
+    )
+    run_cmd(
+        client,
+        "systemctl daemon-reload",
+        sudo_password=sudo_password,
+        sudo=True,
+        host=host,
+    )
+    run_cmd(
+        client,
+        "systemctl restart kubelet",
+        sudo_password=sudo_password,
+        sudo=True,
+        host=host,
+    )
+
+    if is_control:
+        logging.info(f"[{host}] Uncordoning control plane node")
+        run_cmd(
+            client,
+            "kubectl uncordon $(hostname)",
+            sudo_password=sudo_password,
+            sudo=True,
+            host=host,
+        )
+
+    logging.info(f"[{host}] Upgrade process completed")
 
 
 def main():
     nodes = read_inventory()
     if not nodes["control"]:
-        print("No control plane node found in inventory.")
+        logging.error("No control plane node found in inventory.")
         return
 
-    # Pick first control plane node for upgrade apply
-    control_node = nodes["control"][0]
-    client = ssh_connect(control_node)
+    ssh_config = load_ssh_config()
+    sudo_password = getpass.getpass("Enter sudo password for all nodes: ")
 
-    current_version = get_current_k8s_version(client)
-    latest_version = get_latest_k8s_version(client)
-    print(f"Current version: {current_version}, Latest available: {latest_version}")
+    # Pick first control plane node for upgrade apply
+    control_host = nodes["control"][0]
+    hostname, user, keyfile, port = get_ssh_params(ssh_config, control_host)
+    client = ssh_connect(hostname, user, keyfile, port)
+
+    current_version = get_current_k8s_version(client, sudo_password, control_host)
+    latest_version = get_latest_k8s_version(client, sudo_password, control_host)
+    logging.info(
+        f"Current version: {current_version}, Latest available: {latest_version}"
+    )
+
+    all_hosts = nodes["control"] + nodes["worker"]
+    new_minor_version = ".".join(latest_version.split(".")[:2])
 
     # Update sources on all nodes
-    all_nodes = nodes["control"] + nodes["worker"]
-    new_minor_version = ".".join(latest_version.split(".")[:2])
-    for node in all_nodes:
-        print(f"Updating sources on {node}...")
-        c = ssh_connect(node)
-        update_k8s_sources(c, new_minor_version)
+    for host in all_hosts:
+        hostname, user, keyfile, port = get_ssh_params(ssh_config, host)
+        logging.info(f"[{host}] Connecting to update sources")
+        c = ssh_connect(hostname, user, keyfile, port)
+        update_k8s_sources(c, new_minor_version, sudo_password, host)
         c.close()
 
     # Upgrade control plane node
-    print(f"Upgrading control plane node: {control_node}")
-    upgrade_k8s_node(client, latest_version, is_control=True)
+    logging.info(f"[{control_host}] Upgrading control plane node")
+    upgrade_k8s_node(
+        client, latest_version, sudo_password, control_host, is_control=True
+    )
     client.close()
 
     # Upgrade worker nodes
-    for node in nodes["worker"]:
-        print(f"Upgrading worker node: {node}")
-        c = ssh_connect(node)
-        upgrade_k8s_node(c, latest_version)
+    for host in nodes["worker"]:
+        hostname, user, keyfile, port = get_ssh_params(ssh_config, host)
+        logging.info(f"[{host}] Upgrading worker node")
+        c = ssh_connect(hostname, user, keyfile, port)
+        upgrade_k8s_node(c, latest_version, sudo_password, host)
         c.close()
 
-    print("Kubernetes upgrade completed!")
+    logging.info("Kubernetes upgrade completed successfully!")
 
 
 if __name__ == "__main__":
