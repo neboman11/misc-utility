@@ -30,7 +30,7 @@ parse_inventory() {
 
 remote_sudo() {
   local host="$1"; shift
-  ssh ${SSH_OPTS} -p "$SSH_PORT" "${SSH_USER}@${host}" "sudo bash -lc '$*'"
+  ssh -t ${SSH_OPTS} -p "$SSH_PORT" "${SSH_USER}@${host}" "sudo bash -lc '$*'"
 }
 
 kubectl_cmd() { KUBECONFIG="${KUBECONFIG_PATH}" kubectl "$@"; }
@@ -64,12 +64,12 @@ detect_next_version() {
   # Ask the leader what versions are available
   local latest_patch
   latest_patch=$(remote_sudo "$leader_host" "
-    apt-cache madison kubeadm \
+  apt-cache madison kubeadm \
       | awk '{print \$3}' \
       | grep -E '^1\\.${next_minor}\\.' \
       | sort -V \
       | tail -n1
-  ")
+  " | tr -d '\r' | head -n1)
 
   [ -n "$latest_patch" ] || die "No version found in apt-cache for v1.${next_minor}.x on leader node"
 
@@ -130,8 +130,16 @@ mapfile -t CP_FOLLOWERS < <(parse_inventory | awk '$1=="cp"{print $2" "$3}')
 mapfile -t WORKERS < <(parse_inventory | awk '$1=="worker"{print $2" "$3}')
 
 # Detect target version on leader
-TARGET_DEB_VERSION=$(detect_next_version "${CP_LEADER_HOST}")
-TARGET_SHORT_VERSION="v$(echo "$TARGET_DEB_VERSION" | sed 's/-.*//')"
+TARGET_DEB_VERSION=$(detect_next_version "${CP_LEADER_HOST}" | tr -d '\r')
+if [ -z "$TARGET_DEB_VERSION" ]; then
+  die "Failed to detect next upgrade version from leader node"
+fi
+
+# Extract x.y.z part before any dash
+TARGET_SHORT_VERSION="v$(echo "$TARGET_DEB_VERSION" | sed -E 's/^([0-9]+\.[0-9]+\.[0-9]+).*/\1/')"
+if [ "$TARGET_SHORT_VERSION" = "v" ]; then
+  die "Failed to parse short version from $TARGET_DEB_VERSION"
+fi
 info "Target upgrade: Debian=${TARGET_DEB_VERSION}, kubeadm short=${TARGET_SHORT_VERSION}"
 
 info "Cluster before upgrade:"
