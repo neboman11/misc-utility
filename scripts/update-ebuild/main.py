@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 import re
 import subprocess
 import urllib.request
@@ -19,7 +18,7 @@ def get_latest_tag(repo: str) -> str | None:
         tags = json.load(r)
     if not tags:
         return None
-    return tags[0]["name"].lstrip("v")  # strip leading v if present
+    return tags[0]["name"].lstrip("v")
 
 
 def get_existing_versions(pkgdir: Path, pn: str) -> list[str]:
@@ -32,7 +31,8 @@ def get_existing_versions(pkgdir: Path, pn: str) -> list[str]:
     return sorted(versions)
 
 
-def extract_repo_from_ebuild(ebuild_path):
+def extract_repo_from_ebuild(ebuild_path: Path) -> str:
+    """Extract GitHub org/repo from EGIT_REPO_URI."""
     with open(ebuild_path, "r", encoding="utf-8") as f:
         content = f.read()
 
@@ -49,15 +49,32 @@ def extract_repo_from_ebuild(ebuild_path):
 def bump_src_uri(text: str, repo: str, oldver: str, newver: str) -> str:
     """Replace the version in SRC_URI tarball with new version."""
     pattern = re.compile(rf"https://github.com/{repo}/archive/refs/tags/([^ ]+)")
-    return pattern.sub(
+    text = pattern.sub(
         f"https://github.com/{repo}/archive/refs/tags/{newver}.tar.gz", text
-    ).replace(f"{oldver}.tar.gz", f"{newver}.tar.gz")
+    )
+    text = text.replace(f"{oldver}.tar.gz", f"{newver}.tar.gz")
+    return text
+
+
+def set_keywords(text: str, newver: str) -> str:
+    """Set ~amd64 for all versions except 9999."""
+    if newver != "9999":
+        if re.search(r"^KEYWORDS=", text, re.MULTILINE):
+            text = re.sub(
+                r"^KEYWORDS=.*", 'KEYWORDS="~amd64"', text, flags=re.MULTILINE
+            )
+        else:
+            # add KEYWORDS line after EAPI
+            text = re.sub(
+                r"^(EAPI=.*\n)", r'\1KEYWORDS="~amd64"\n', text, flags=re.MULTILINE
+            )
+    return text
 
 
 def write_new_ebuild(
     pkgdir: Path, pn: str, base_ebuild: Path, oldver: str, newver: str, repo: str
 ):
-    """Copy base ebuild, update SRC_URI, regen manifest."""
+    """Copy base ebuild, update SRC_URI, set KEYWORDS, regenerate manifest."""
     newfile = pkgdir / f"{pn}-{newver}.ebuild"
     if newfile.exists():
         print(f"Ebuild {newfile} already exists")
@@ -65,6 +82,7 @@ def write_new_ebuild(
     text = base_ebuild.read_text()
     if oldver != "9999" and newver != "9999":
         text = bump_src_uri(text, repo, oldver, newver)
+    text = set_keywords(text, newver)
     newfile.write_text(text)
     print(f"Created {newfile}")
     subprocess.run(["ebuild", str(newfile), "manifest"], check=True)
@@ -98,6 +116,7 @@ def main():
         sys.exit(1)
 
     print(f"Detected repo: {repo}")
+
     latest_tag = get_latest_tag(repo)
 
     if latest_tag:
