@@ -24,6 +24,13 @@ def main():
     changes = sorted([package.name for package in cache.get_changes()])
 
     print("Sending package list to discord...")
+    if not changes:
+        # No packages to update — notify and exit without scheduling a reboot
+        no_changes_msg = f"{hostname}: No updates available."
+        print(no_changes_msg)
+        send_notification(no_changes_msg)
+        return
+
     changes_notification_message = (
         f"{hostname}: The following updates will be applied:\n"
     )
