@@ -1,7 +1,12 @@
 [project]
 name = "k8s-upgrade"
 version = "0.1.0"
-description = "Add your description here"
+description = "SSH-based rolling Kubernetes cluster upgrade script"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "paramiko",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
