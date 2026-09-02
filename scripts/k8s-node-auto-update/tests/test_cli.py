@@ -234,6 +234,7 @@ class NotificationTests(unittest.TestCase):
         self.assertEqual(request.full_url, "https://ntfy.example.test/topic")
         self.assertEqual(request.data, b'{"message": "message"}')
         self.assertEqual(request.get_header("Authorization"), "Bearer token")
+        self.assertEqual(request.get_header("User-agent"), "k8s-node-auto-update/1.0")
         self.assertEqual(urlopen.call_args.kwargs["timeout"], 10)
 
     @patch.object(cli, "urlopen", side_effect=cli.URLError("offline"))

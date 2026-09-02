@@ -68,6 +68,7 @@ def notify(message: str, *, environment: Mapping[str, str] | None = None) -> boo
         headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
+            "User-Agent": "k8s-node-auto-update/1.0",
         },
         method="POST",
     )
