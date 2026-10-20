@@ -5,7 +5,7 @@ Rolling Kubernetes version upgrade script for kubeadm-managed clusters. Connects
 ## Requirements
 
 - Python 3.12+
-- `paramiko` (`pip install paramiko` or `uv sync`)
+- `paramiko` and `cryptography>=50.0.0` (installed by `uv sync`)
 - SSH access to all cluster nodes (key-based auth, configured in `~/.ssh/config`)
 - Sudo access on each node
 
@@ -25,6 +25,11 @@ Rolling Kubernetes version upgrade script for kubeadm-managed clusters. Connects
    ```
    uv sync
    ```
+
+   The manifest requires `cryptography>=50.0.0` to exclude known vulnerable
+   releases. Existing environments must be synced to pick up dependency updates.
+   Without uv, install with `python -m pip install .` rather than installing
+   Paramiko alone.
 
 ## Usage
 
