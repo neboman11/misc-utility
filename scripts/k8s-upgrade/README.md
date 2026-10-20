@@ -62,3 +62,9 @@ The script will pause and ask for confirmation before applying any changes.
 ```
 python -m pytest
 ```
+
+## Continuous integration
+
+GitHub Actions runs both Python projects' test suites and audits this project's
+locked dependencies on every pull request to `main` and every push to `main`.
+The `CI` check must pass before merging; branches must be up to date with `main`.
