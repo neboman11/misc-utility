@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          version: "0.13.3"
+          python-version: "3.12"
+      - name: Test Kubernetes upgrade script
+        working-directory: scripts/k8s-upgrade
+        run: uv run --locked --with pytest python -m pytest
+      - name: Test node auto-update utility
+        working-directory: scripts/k8s-node-auto-update
+        run: uv run --locked python -m unittest discover -s tests -v
+      - name: Audit locked dependencies
+        working-directory: scripts/k8s-upgrade
+        shell: bash
+        run: uv export --locked --no-hashes --format requirements-txt | uvx pip-audit --no-deps --disable-pip -r /dev/stdin
